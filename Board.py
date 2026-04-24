@@ -5,5 +5,5 @@ class Board:
     rivers = list[River]
     tiles = np.array([],dtype=Tile)
 
-    def tile_coords(tile:Tile):
+    def tile_coords(tile:Tile) -> tuple[int,int]:
         pass
