@@ -1,5 +1,6 @@
 from Tile import Tile
 from Board import Board
+from typing import Tuple
 class River:
     tile1: Tile
     tile2: Tile
@@ -8,5 +9,8 @@ class River:
             raise ValueError("River got the same Tile twice")
         if(not board.isNeighbour(tile1, tile2)):
             raise ValueError("River got 2 tiles, but they were not adjacent")
-        tile1 = tile1
-        tile2 = tile2
+        self.tile1 = tile1
+        self.tile2 = tile2
+    
+    def getTiles(self) -> Tuple[Tile, Tile]:
+        return (self.tile1, self.tile2)
