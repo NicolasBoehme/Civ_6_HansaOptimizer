@@ -15,5 +15,5 @@ class Board:
     def areNeighbours(self, tile1:Tile,tile2:Tile) -> bool:
         pass
 
-    def addTile(self, tile:Tile, coordinates:Tuple[int,int]):
+    def setTile(self, tile:Tile, coordinates:Tuple[int,int]):
         self.tiles[coordinates[0],coordinates[1]] = tile
