@@ -12,5 +12,5 @@ class Board:
     def getNeighbours(tile:Tile) -> Tuple[Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile]]:
         pass
 
-    def isNeighbour(tile:Tile) -> bool:
+    def areNeighbours(tile1:Tile,tile2:Tile) -> bool:
         pass
