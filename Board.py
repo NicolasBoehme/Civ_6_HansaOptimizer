@@ -6,11 +6,14 @@ class Board:
     rivers = list[River]
     tiles = np.array([],dtype=Tile)
 
-    def tile_coords(tile:Tile) -> Tuple[int,int]:
+    def tile_coords(self,tile:Tile) -> Tuple[int,int]:
         pass
 
-    def getNeighbours(tile:Tile) -> Tuple[Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile]]:
+    def getNeighbours(self, tile:Tile) -> Tuple[Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile], Optional[Tile]]:
         pass
 
-    def areNeighbours(tile1:Tile,tile2:Tile) -> bool:
+    def areNeighbours(self, tile1:Tile,tile2:Tile) -> bool:
         pass
+
+    def addTile(self, tile:Tile, coordinates:Tuple[int,int]):
+        self.tiles[coordinates[0],coordinates[1]] = tile
