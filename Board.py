@@ -17,3 +17,6 @@ class Board:
 
     def setTile(self, tile:Tile, coordinates:Tuple[int,int]):
         self.tiles[coordinates[0],coordinates[1]] = tile
+
+    def setBoard(self, board: np.array):
+        pass
