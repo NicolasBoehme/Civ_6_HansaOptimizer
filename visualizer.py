@@ -156,26 +156,51 @@ def _city_at(coord: Coord, render_cities: Sequence[RenderCity]) -> Optional[Rend
     return None
 
 
+def _tile_lookup(board) -> Dict[int, Coord]:
+    lookup: Dict[int, Coord] = {}
+    rows, cols = board.tiles.shape
+    for row in range(rows):
+        for col in range(cols):
+            tile = board.tiles[row, col]
+            if tile is not None:
+                lookup[id(tile)] = (col, row)
+    return lookup
+
+
 def _river_segments(board, visible: Set[Coord]) -> List[Tuple[Coord, Coord]]:
     segments: List[Tuple[Coord, Coord]] = []
+    tile_lookup = _tile_lookup(board)
     for river in getattr(board, "rivers", []) or []:
         t1, t2 = river.getTiles()
-        c1 = c2 = None
-        rows, cols = board.tiles.shape
-        for row in range(rows):
-            for col in range(cols):
-                tile = board.tiles[row, col]
-                if tile is t1:
-                    c1 = (col, row)
-                elif tile is t2:
-                    c2 = (col, row)
-                if c1 is not None and c2 is not None:
-                    break
-            if c1 is not None and c2 is not None:
-                break
+        c1 = tile_lookup.get(id(t1))
+        c2 = tile_lookup.get(id(t2))
         if c1 is not None and c2 is not None and c1 in visible and c2 in visible:
             segments.append((c1, c2))
     return segments
+
+
+def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, float]:
+    x1, y1 = _coord_to_pixel(left)
+    x2, y2 = _coord_to_pixel(right)
+    mid_x = (x1 + x2) / 2
+    mid_y = (y1 + y2) / 2
+
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return mid_x, mid_y, mid_x, mid_y
+
+    # Shared hex edge is perpendicular to the line between the two centers.
+    perp_x = -dy / length
+    perp_y = dx / length
+    half_edge = HEX_SIZE / 2
+    return (
+        mid_x - perp_x * half_edge,
+        mid_y - perp_y * half_edge,
+        mid_x + perp_x * half_edge,
+        mid_y + perp_y * half_edge,
+    )
 
 
 def _terrain_fill(board, coord: Coord) -> str:
@@ -260,8 +285,7 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
     )
 
     for left, right in _river_segments(board, visible):
-        x1, y1 = _coord_to_pixel(left)
-        x2, y2 = _coord_to_pixel(right)
+        x1, y1, x2, y2 = _river_edge_pixels(left, right)
         canvas.create_line(
             x1 + x_offset,
             y1 + y_offset,
