@@ -34,6 +34,18 @@ TERRAIN_FILL = {
     "lake": "#7cb4dd",
 }
 
+# Tint applied to plains/hills tiles that touch a river edge so the corridor
+# reads at a glance even before the edge lines are drawn.
+RIVER_TILE_TINT = {
+    "plains": "#cdc096",
+    "hills": "#b09668",
+}
+
+RIVER_EDGE_COLOR = "#1c6dc8"
+RIVER_EDGE_HIGHLIGHT = "#7fb6e8"
+RIVER_EDGE_WIDTH = 9
+RIVER_EDGE_HIGHLIGHT_WIDTH = 3
+
 DISTRICT_STYLE = {
     H: {"fill": "#cb7a52", "label": "H"},
     CH: {"fill": "#f2d16b", "label": "CH"},
@@ -179,6 +191,22 @@ def _river_segments(board, visible: Set[Coord]) -> List[Tuple[Coord, Coord]]:
     return segments
 
 
+def _river_tile_set(board) -> Set[Coord]:
+    """All tile coords that sit on at least one river edge (i.e. river-endpoint
+    tiles). The visualiser uses this to tint the tile background and outline
+    river-touching hexes so the corridor reads even when several edges overlap.
+    """
+    tiles: Set[Coord] = set()
+    tile_lookup = _tile_lookup(board)
+    for river in getattr(board, "rivers", []) or []:
+        t1, t2 = river.getTiles()
+        for tile in (t1, t2):
+            coord = tile_lookup.get(id(tile))
+            if coord is not None:
+                tiles.add(coord)
+    return tiles
+
+
 def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, float]:
     x1, y1 = _coord_to_pixel(left)
     x2, y2 = _coord_to_pixel(right)
@@ -191,10 +219,12 @@ def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, 
     if length == 0:
         return mid_x, mid_y, mid_x, mid_y
 
-    # Shared hex edge is perpendicular to the line between the two centers.
+    # Shared hex edge is perpendicular to the line between the two centers,
+    # scaled to the actual edge length (HEX_SIZE / sqrt(3)) so the river line
+    # neatly tracks the hex border without bleeding into adjacent tiles.
     perp_x = -dy / length
     perp_y = dx / length
-    half_edge = HEX_SIZE / 2
+    half_edge = (HEX_SIZE / math.sqrt(3))
     return (
         mid_x - perp_x * half_edge,
         mid_y - perp_y * half_edge,
@@ -203,9 +233,11 @@ def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, 
     )
 
 
-def _terrain_fill(board, coord: Coord) -> str:
+def _terrain_fill(board, coord: Coord, river_tiles: Set[Coord]) -> str:
     tile = board.tiles[coord[1], coord[0]]
     terrain = getattr(tile, "terrain", "plains")
+    if coord in river_tiles and terrain in RIVER_TILE_TINT:
+        return RIVER_TILE_TINT[terrain]
     return TERRAIN_FILL.get(terrain, "#d9d0b6")
 
 
@@ -284,27 +316,21 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         font=("Helvetica", 10),
     )
 
-    for left, right in _river_segments(board, visible):
-        x1, y1, x2, y2 = _river_edge_pixels(left, right)
-        canvas.create_line(
-            x1 + x_offset,
-            y1 + y_offset,
-            x2 + x_offset,
-            y2 + y_offset,
-            fill="#3b89c9",
-            width=7,
-            capstyle=tk.ROUND,
-        )
+    river_tiles = _river_tile_set(board)
+    river_segments = _river_segments(board, visible)
 
+    # Pass 1: tile polygons (with river-tinted fill / blue outline for river tiles).
     for coord in visible_coords:
         cx, cy = _coord_to_pixel(coord)
         cx += x_offset
         cy += y_offset
         city = _city_at(coord, render_cities)
-        district = _district_at(coord, render_cities)
-        fill = _terrain_fill(board, coord)
+        fill = _terrain_fill(board, coord, river_tiles)
         outline = "#7b6c57"
         width_px = 1
+        if coord in river_tiles:
+            outline = "#3a6a9c"
+            width_px = 2
         if city is not None:
             outline = "#2e2d2d"
             width_px = 3
@@ -314,6 +340,35 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
             outline=outline,
             width=width_px,
         )
+
+    # Pass 2: rivers — drawn after polygons so the heavy blue line sits on top
+    # of the tile borders. Each segment is a darker base line with a brighter
+    # highlight stripe on top — readable even where several segments share a
+    # junction tile.
+    for left, right in river_segments:
+        x1, y1, x2, y2 = _river_edge_pixels(left, right)
+        canvas.create_line(
+            x1 + x_offset, y1 + y_offset,
+            x2 + x_offset, y2 + y_offset,
+            fill=RIVER_EDGE_COLOR,
+            width=RIVER_EDGE_WIDTH,
+            capstyle=tk.ROUND,
+        )
+        canvas.create_line(
+            x1 + x_offset, y1 + y_offset,
+            x2 + x_offset, y2 + y_offset,
+            fill=RIVER_EDGE_HIGHLIGHT,
+            width=RIVER_EDGE_HIGHLIGHT_WIDTH,
+            capstyle=tk.ROUND,
+        )
+
+    # Pass 3: per-tile overlays — district markers, city labels, coords.
+    for coord in visible_coords:
+        cx, cy = _coord_to_pixel(coord)
+        cx += x_offset
+        cy += y_offset
+        city = _city_at(coord, render_cities)
+        district = _district_at(coord, render_cities)
 
         if district is not None:
             label, color = district
@@ -389,6 +444,7 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         ("CH", DISTRICT_STYLE[CH]["fill"]),
         ("AQ", DISTRICT_STYLE[AQ]["fill"]),
         ("HB", DISTRICT_STYLE[HB]["fill"]),
+        ("River edge", RIVER_EDGE_COLOR),
     ]
     for idx, (label, color) in enumerate(legend_items):
         y = legend_y + 28 + idx * 24

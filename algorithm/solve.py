@@ -5,30 +5,35 @@ Inputs (duck-typed):
          iterable `rivers` of objects whose `getTiles() -> (Tile, Tile)`.
 - starting_city: dict-like with keys
         center  : (col, row)
-        hansa   : (col, row)
-        commhub : (col, row)
+        hansa   : (col, row) | None
+        commhub : (col, row) | None
         harbor  : (col, row) | None
         aqueduct: (col, row) | None
 - n: number of new cities to place
 - mode: 'hansa_only' or 'combination'
 - exchange_rate: float, used in combination mode
-"""
-from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .bnb import branch_and_bound, objective
-from .candidates import (annotate_synergy, aqueduct_enum_limited, build_city,
-                         enumerate_city_centers, rank_stars)
+Pipeline (deliberately flat — one BnB call per cluster, nothing else):
+1. Extract tile features and the influence field.
+2. Enumerate candidate city centers, then greedily pick N.
+3. Cluster the N picks (plus the starting city) by interaction radius.
+4. For each cluster, run the single-pass BnB in `bnb.solve_cluster`.
+5. Reassemble per-city scores from the final ownership map.
+"""
+from typing import Any, Callable, Dict, List, Optional
+
+from .bnb import solve_cluster
+from .candidates import build_city, enumerate_city_centers
 from .cluster import build_clusters
 from .features import extract_features
 from .hex import Coord, distance
 from .model import (AQ, CH, H, HANSA_ONLY, HB,
                     Assignment, City, CityResult, Cluster, Score, Solution)
-from .scoring import compute_influence_field, score_ch_at, score_hansa_at, score_hb_at
+from .scoring import (compute_influence_field, score_ch_at,
+                      score_hansa_at, score_hb_at)
 
-STAR_TRY_BUDGET_DEFAULT = 1
-AQ_TRY_BUDGET_DEFAULT = 2
 ProgressCallback = Callable[[int, int, str], None]
-ClusterPlan = Tuple[Dict[int, Optional[Coord]], List[Coord]]
+INTERACTION_RADIUS = 6
 
 
 def _build_starting_city(spec: Optional[Dict[str, Any]],
@@ -47,149 +52,49 @@ def _build_starting_city(spec: Optional[Dict[str, Any]],
     return city
 
 
-def _intrinsic_value(city: City,
-                     influence: Dict[Coord, int]) -> float:
-    """A cheap score used to pick which N candidates to keep."""
+def _intrinsic_value(city: City, influence: Dict[Coord, int]) -> float:
     if not city.hansa_candidates:
         return float("-inf")
     base = max(influence.get(t, 0) for t in city.hansa_candidates)
-    # Triangle potential: +2 (CH adjacent), +2 if Aq possible, +2 if coastal.
-    triangle = 2 + (2 if city.aqueduct_candidates else 0) + (2 if city.coastal_flag else 0)
+    triangle = 2 + (2 if city.aqueduct_candidates else 0) \
+                 + (2 if city.coastal_flag else 0)
     return base + triangle
 
 
-def _pick_n_candidates(candidates: List[City], n: int,
-                       fixed_centers: List[Coord],
-                       influence: Dict[Coord, int],
-                       min_spacing: int = 4) -> List[City]:
-    """Greedy: pick the top-scoring candidates respecting pairwise ≥ 4 spacing
-    among the chosen set (and against fixed centers, already enforced upstream).
-    """
+def _pick_n_centers(candidates: List[City], n: int,
+                    fixed_centers: List[Coord],
+                    influence: Dict[Coord, int],
+                    min_spacing: int = 4) -> List[City]:
     if n <= 0:
         return []
-    ranked = sorted(candidates,
-                    key=lambda c: -_intrinsic_value(c, influence))
+    ranked = sorted(candidates, key=lambda c: -_intrinsic_value(c, influence))
     chosen: List[City] = []
-    chosen_coords: List[Coord] = list(fixed_centers)
+    taken: List[Coord] = list(fixed_centers)
     for c in ranked:
         if len(chosen) >= n:
             break
-        if any(distance(c.coords, ec) < min_spacing for ec in chosen_coords):
+        if any(distance(c.coords, ec) < min_spacing for ec in taken):
             continue
         chosen.append(c)
-        chosen_coords.append(c.coords)
+        taken.append(c.coords)
     return chosen
 
 
-def _attach_starting_city(clusters: List[Cluster],
-                          starting: Optional[City]) -> List[Cluster]:
-    """Attach the fixed-center starting city to the interacting cluster set.
-
-    If it overlaps one or more clusters, fuse them so joint search sees all
-    cross-city adjacencies. Otherwise keep the starting city as a standalone
-    cluster so its own districts are still optimized.
-    """
-    if starting is None:
-        return clusters
-    INTERACT = 6
-    overlap_idx = [
+def _attach_starting(clusters: List[Cluster],
+                     starting: City) -> List[Cluster]:
+    overlap = [
         i for i, cl in enumerate(clusters)
-        if any(distance(starting.coords, c.coords) <= INTERACT for c in cl.cities)
+        if any(distance(starting.coords, c.coords) <= INTERACTION_RADIUS
+               for c in cl.cities)
     ]
-    if not overlap_idx:
+    if not overlap:
         return clusters + [Cluster(cities=[starting])]
-    merged_cities: List[City] = [starting]
-    for i in overlap_idx:
-        merged_cities.extend(clusters[i].cities)
-    keep = [cl for j, cl in enumerate(clusters) if j not in overlap_idx]
-    keep.append(Cluster(cities=merged_cities))
+    merged: List[City] = [starting]
+    for i in overlap:
+        merged.extend(clusters[i].cities)
+    keep = [cl for j, cl in enumerate(clusters) if j not in overlap]
+    keep.append(Cluster(cities=merged))
     return keep
-
-
-def _solve_cluster(
-    cluster: Cluster,
-    plans: List[ClusterPlan],
-    feature_map,
-    influence: Dict[Coord, int],
-    mode: str,
-    w: float,
-    progress_callback: Optional[ProgressCallback] = None,
-    progress_state: Optional[Dict[str, int]] = None,
-    cluster_idx: int = 1,
-    cluster_count: int = 1,
-) -> Tuple[Dict[int, Assignment], Score]:
-    best_assign: Optional[Dict[int, Assignment]] = None
-    best_score = Score()
-    best_obj = float("-inf")
-
-    for alpha_idx, (alpha, stars) in enumerate(plans, start=1):
-        # Score the no-star baseline first — it acts as a hard floor.
-        no_star_assign, no_star_score = branch_and_bound(
-            cluster, alpha, star=None, feature_map=feature_map,
-            influence=influence, lower_bound=None, mode=mode, w=w,
-        )
-        _tick_progress(
-            progress_callback,
-            progress_state,
-            f"cluster {cluster_idx}/{cluster_count} alpha {alpha_idx}/{len(plans)} baseline",
-        )
-        if objective(no_star_score, mode, w) > best_obj:
-            best_obj = objective(no_star_score, mode, w)
-            best_assign = no_star_assign
-            best_score = no_star_score
-
-        for star_idx, T in enumerate(stars, start=1):
-            star_assign, star_score = branch_and_bound(
-                cluster, alpha, star=T, feature_map=feature_map,
-                influence=influence,
-                lower_bound=(no_star_assign, no_star_score),
-                mode=mode, w=w,
-            )
-            _tick_progress(
-                progress_callback,
-                progress_state,
-                f"cluster {cluster_idx}/{cluster_count} alpha {alpha_idx}/{len(plans)} "
-                f"star {star_idx}/{len(stars)}",
-            )
-            if objective(star_score, mode, w) > best_obj:
-                best_obj = objective(star_score, mode, w)
-                best_assign = star_assign
-                best_score = star_score
-
-    if best_assign is None:
-        # Single-city cluster with no working candidates — return empty.
-        best_assign = {i: Assignment() for i, _ in enumerate(cluster.cities)}
-    return best_assign, best_score
-
-
-def _cluster_search_plan(
-    cluster: Cluster,
-    feature_map,
-    influence: Dict[Coord, int],
-    star_try_budget: int,
-    aqueduct_try_budget: Optional[int],
-) -> List[ClusterPlan]:
-    plans: List[ClusterPlan] = []
-    for alpha in aqueduct_enum_limited(cluster, influence, aqueduct_try_budget):
-        ranked = rank_stars(cluster, alpha, feature_map, influence)
-        stars = [T for T, _ub, _k in ranked[:star_try_budget]]
-        plans.append((alpha, stars))
-    return plans
-
-
-def _plan_steps(plans: List[ClusterPlan]) -> int:
-    return sum(1 + len(stars) for _alpha, stars in plans)
-
-
-def _tick_progress(
-    progress_callback: Optional[ProgressCallback],
-    progress_state: Optional[Dict[str, int]],
-    message: str,
-) -> None:
-    if progress_callback is None or progress_state is None:
-        return
-    progress_state["completed"] += 1
-    progress_callback(progress_state["completed"], progress_state["total"], message)
 
 
 def solve(
@@ -198,14 +103,8 @@ def solve(
     n: int,
     mode: str = HANSA_ONLY,
     exchange_rate: float = 1.0,
-    star_try_budget: int = STAR_TRY_BUDGET_DEFAULT,
-    aqueduct_try_budget: Optional[int] = AQ_TRY_BUDGET_DEFAULT,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Solution:
-    """Run Solution A on the given board.
-
-    Returns a `Solution` with per-city assignments and a total score.
-    """
     feature_map = extract_features(board)
     influence = compute_influence_field(feature_map)
 
@@ -213,58 +112,33 @@ def solve(
     fixed_centers: List[Coord] = [starting.coords] if starting else []
 
     candidates = enumerate_city_centers(feature_map, fixed_centers)
-    annotate_synergy(candidates, fixed_centers)
+    chosen = _pick_n_centers(candidates, n, fixed_centers, influence)
 
-    chosen = _pick_n_candidates(candidates, n, fixed_centers, influence)
     if not chosen and starting is None:
         return Solution(cities=[], score=Score(), mode=mode,
                         exchange_rate=exchange_rate)
 
     clusters = build_clusters(chosen) if chosen else []
-    clusters = _attach_starting_city(clusters, starting)
+    if starting is not None:
+        clusters = _attach_starting(clusters, starting)
 
-    cluster_work = [
-        (
-            cluster,
-            _cluster_search_plan(
-                cluster,
-                feature_map,
-                influence,
-                star_try_budget,
-                aqueduct_try_budget,
-            ),
-        )
-        for cluster in clusters
-    ]
-    total_steps = sum(_plan_steps(plans) for _cluster, plans in cluster_work)
+    total = max(1, len(clusters))
     if progress_callback is not None:
-        progress_callback(0, max(1, total_steps), "planning complete")
+        progress_callback(0, total, "starting")
 
     total_score = Score()
     city_results: List[CityResult] = []
-    progress_state = {"completed": 0, "total": max(1, total_steps)}
 
-    for cluster_idx, (cluster, plans) in enumerate(cluster_work, start=1):
-        assignments, cluster_score = _solve_cluster(
-            cluster,
-            plans,
-            feature_map,
-            influence,
-            mode,
-            exchange_rate,
-            progress_callback=progress_callback,
-            progress_state=progress_state,
-            cluster_idx=cluster_idx,
-            cluster_count=len(cluster_work),
+    for idx, cluster in enumerate(clusters, start=1):
+        assignments, cluster_score = solve_cluster(
+            cluster, feature_map, mode, exchange_rate,
         )
-
         owners = {}
         for ci, a in assignments.items():
             for kind, t in ((H, a.hansa), (CH, a.commhub),
                             (HB, a.harbor), (AQ, a.aqueduct)):
                 if t is not None:
                     owners[t] = (ci, kind)
-
         for ci, city in enumerate(cluster.cities):
             a = assignments.get(ci, Assignment())
             prod = score_hansa_at(a.hansa, feature_map, owners) if a.hansa else 0
@@ -275,8 +149,9 @@ def solve(
                 gold += score_hb_at(a.harbor, feature_map, owners)
             city_results.append(CityResult(
                 city=city, assignment=a, score=Score(prod, gold)))
-
         total_score = total_score + cluster_score
+        if progress_callback is not None:
+            progress_callback(idx, total, f"cluster {idx}/{total}")
 
     return Solution(
         cities=city_results,
