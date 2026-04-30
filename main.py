@@ -105,7 +105,7 @@ def main() -> int:
               f"H={a.hansa} CH={a.commhub} HB={a.harbor} AQ={a.aqueduct} "
               f"score(prod={cr.score.production}, gold={cr.score.gold})")
     print("Solve complete. Opening viewer; close the window to end the run.")
-    show_solution(board, solution, focus_radius=2)
+    show_solution(board, solution)
     return 0
 
 

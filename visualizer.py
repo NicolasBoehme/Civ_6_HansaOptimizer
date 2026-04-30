@@ -136,8 +136,10 @@ def _focus_coords(render_cities: Sequence[RenderCity]) -> Set[Coord]:
     return focus
 
 
-def _visible_coords(board, render_cities: Sequence[RenderCity], focus_radius: int) -> List[Coord]:
+def _visible_coords(board, render_cities: Sequence[RenderCity], focus_radius: Optional[int]) -> List[Coord]:
     coords = _board_coords(board)
+    if focus_radius is None or focus_radius < 0:
+        return coords
     focus = _focus_coords(render_cities)
     if not focus:
         start = getattr(board, "starting_city_center", None)
@@ -523,13 +525,14 @@ def _tile_lines(board, coord: Coord, render_cities: Sequence[RenderCity], river_
     return lines
 
 
-def _summary_lines(board, solution: Solution, render_cities: Sequence[RenderCity], focus_radius: int) -> List[str]:
+def _summary_lines(board, solution: Solution, render_cities: Sequence[RenderCity], focus_radius: Optional[int]) -> List[str]:
+    focus_label = "whole map" if focus_radius is None or focus_radius < 0 else f"{focus_radius} hexes"
     lines = [
         f"Mode: {solution.mode}",
         f"Total prod: {solution.score.production}",
         f"Total gold: {solution.score.gold}",
         f"Weighted: {solution.weighted_total():.2f}",
-        f"Focus crop: {focus_radius} hexes",
+        f"Focus crop: {focus_label}",
         "",
     ]
     for city in render_cities:
@@ -544,7 +547,7 @@ def _summary_lines(board, solution: Solution, render_cities: Sequence[RenderCity
     return lines
 
 
-def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
+def show_solution(board, solution: Solution, focus_radius: Optional[int] = None) -> bool:
     """Open a compact Swing-style desktop view of the solved board."""
     if os.environ.get("HANSA_NO_GUI") == "1":
         return False
@@ -593,7 +596,11 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         PADDING,
         52,
         anchor="w",
-        text=f"Compact view: tiles within {focus_radius} hexes of each solved city or district.",
+        text=(
+            "Full map view."
+            if focus_radius is None or focus_radius < 0
+            else f"Compact view: tiles within {focus_radius} hexes of each solved city or district."
+        ),
         fill="#655e53",
         font=("Helvetica", 10),
     )
