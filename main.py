@@ -3,8 +3,8 @@ import sys
 import time
 from typing import Any, Optional, Tuple
 
-from algorithm import HANSA_ONLY, COMBINATION, solve
-from test_board import board_summary, build_three_river_plains_board
+from algorithm import HANSA_ONLY, COMBINATION, solve_compat as solve
+from test_board import board_summary, build_civ_like_test_board
 from visualizer import show_solution
 
 
@@ -48,8 +48,8 @@ class TerminalProgressBar:
 
 
 def load_board() -> Tuple[Optional[Any], Optional[dict]]:
-    """Return the built-in hypothetical test board."""
-    return build_three_river_plains_board()
+    """Return the built-in Civ-like test board."""
+    return build_civ_like_test_board()
 
 
 def main() -> int:

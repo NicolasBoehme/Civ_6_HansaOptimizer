@@ -20,7 +20,7 @@ from algorithm.hex import Coord, distance
 
 HEX_SIZE = 28
 PADDING = 36
-SIDEBAR_WIDTH = 290
+SIDEBAR_WIDTH = 340
 HEADER_HEIGHT = 72
 
 TERRAIN_FILL = {
@@ -45,6 +45,10 @@ RIVER_EDGE_COLOR = "#1c6dc8"
 RIVER_EDGE_HIGHLIGHT = "#7fb6e8"
 RIVER_EDGE_WIDTH = 9
 RIVER_EDGE_HIGHLIGHT_WIDTH = 3
+RIVER_NODE_RADIUS = 5
+HOVER_OUTLINE = "#fff1a8"
+HOVER_PANEL_FILL = "#f2ebdd"
+HOVER_PANEL_BORDER = "#c5b59c"
 
 DISTRICT_STYLE = {
     H: {"fill": "#cb7a52", "label": "H"},
@@ -64,6 +68,26 @@ class RenderCity:
     aqueduct: Optional[Coord]
     production: int
     gold: int
+
+
+def _hex_to_rgb(color: str) -> Tuple[int, int, int]:
+    color = color.lstrip("#")
+    return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+
+
+def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _blend(color: str, target: str, weight: float) -> str:
+    base_r, base_g, base_b = _hex_to_rgb(color)
+    target_r, target_g, target_b = _hex_to_rgb(target)
+    mixed = (
+        int(base_r + (target_r - base_r) * weight),
+        int(base_g + (target_g - base_g) * weight),
+        int(base_b + (target_b - base_b) * weight),
+    )
+    return _rgb_to_hex(mixed)
 
 
 def _board_coords(board) -> List[Coord]:
@@ -143,6 +167,17 @@ def _hex_points(cx: float, cy: float) -> List[float]:
         points.extend((
             cx + HEX_SIZE * math.cos(angle),
             cy + HEX_SIZE * math.sin(angle),
+        ))
+    return points
+
+
+def _scaled_hex_points(cx: float, cy: float, scale: float) -> List[float]:
+    points: List[float] = []
+    for i in range(6):
+        angle = math.radians(60 * i - 30)
+        points.extend((
+            cx + HEX_SIZE * scale * math.cos(angle),
+            cy + HEX_SIZE * scale * math.sin(angle),
         ))
     return points
 
@@ -233,12 +268,259 @@ def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, 
     )
 
 
+def _river_edge_endpoint_pairs(
+    board,
+    visible: Set[Coord],
+    x_offset: float,
+    y_offset: float,
+) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    out: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    for left, right in _river_segments(board, visible):
+        x1, y1, x2, y2 = _river_edge_pixels(left, right)
+        out.append(((x1 + x_offset, y1 + y_offset), (x2 + x_offset, y2 + y_offset)))
+    return out
+
+
 def _terrain_fill(board, coord: Coord, river_tiles: Set[Coord]) -> str:
     tile = board.tiles[coord[1], coord[0]]
     terrain = getattr(tile, "terrain", "plains")
     if coord in river_tiles and terrain in RIVER_TILE_TINT:
         return RIVER_TILE_TINT[terrain]
     return TERRAIN_FILL.get(terrain, "#d9d0b6")
+
+
+def _resource_info(tile) -> Optional[Tuple[str, str]]:
+    contains = getattr(tile, "contains", None)
+    tier = getattr(contains, "tier", None)
+    if tier is None:
+        return None
+    return getattr(contains, "name", "resource"), tier
+
+
+def _resource_marker_style(tier: str) -> Tuple[str, str]:
+    if tier == "luxury":
+        return "#d7b24c", "#fff4bf"
+    if tier == "strategic":
+        return "#6e7681", "#d8dde2"
+    return "#8cab56", "#eef7c8"
+
+
+def _draw_resource_marker(canvas, cx: float, cy: float, tile) -> None:
+    info = _resource_info(tile)
+    if info is None:
+        return
+    _name, tier = info
+    fill, highlight = _resource_marker_style(tier)
+    canvas.create_polygon(
+        cx, cy - 9,
+        cx + 8, cy,
+        cx, cy + 9,
+        cx - 8, cy,
+        fill=fill,
+        outline="#2d2a26",
+        width=1,
+    )
+    canvas.create_polygon(
+        cx, cy - 5,
+        cx + 4, cy,
+        cx, cy + 5,
+        cx - 4, cy,
+        fill=highlight,
+        outline="",
+    )
+
+
+def _draw_water_detail(canvas, cx: float, cy: float, terrain: str) -> None:
+    accent = {
+        "ocean": "#8fc0e6",
+        "coast": "#bad7e8",
+        "lake": "#cde3ee",
+        "reef": "#98ddd9",
+    }.get(terrain, "#8fc0e6")
+    canvas.create_polygon(
+        _scaled_hex_points(cx, cy, 0.78),
+        fill=_blend(TERRAIN_FILL.get(terrain, "#7cb4dd"), "#ffffff", 0.18),
+        outline="",
+    )
+    for dy in (-8, 0, 8):
+        canvas.create_arc(
+            cx - 18,
+            cy - 8 + dy,
+            cx + 18,
+            cy + 10 + dy,
+            start=12,
+            extent=150,
+            style=tk.ARC,
+            outline=accent,
+            width=2,
+        )
+    if terrain == "reef":
+        for dx, dy in ((-7, 4), (0, -3), (8, 5)):
+            canvas.create_oval(
+                cx + dx - 3,
+                cy + dy - 3,
+                cx + dx + 3,
+                cy + dy + 3,
+                fill="#eebf7f",
+                outline="",
+            )
+            canvas.create_line(
+                cx + dx,
+                cy + dy + 3,
+                cx + dx,
+                cy + dy + 7,
+                fill="#ec8d7a",
+                width=2,
+            )
+
+
+def _draw_plains_detail(canvas, cx: float, cy: float) -> None:
+    canvas.create_polygon(
+        _scaled_hex_points(cx, cy, 0.8),
+        fill="#d9ca95",
+        outline="",
+    )
+    for dx in (-10, 0, 10):
+        canvas.create_arc(
+            cx + dx - 9,
+            cy - 4,
+            cx + dx + 9,
+            cy + 10,
+            start=18,
+            extent=120,
+            style=tk.ARC,
+            outline="#bca96f",
+            width=2,
+        )
+
+
+def _draw_hill_detail(canvas, cx: float, cy: float) -> None:
+    canvas.create_polygon(
+        cx - 18, cy + 8,
+        cx - 8, cy - 5,
+        cx + 2, cy + 6,
+        fill="#98744c",
+        outline="",
+    )
+    canvas.create_polygon(
+        cx - 2, cy + 10,
+        cx + 10, cy - 8,
+        cx + 20, cy + 8,
+        fill="#85613f",
+        outline="",
+    )
+    canvas.create_polygon(
+        cx - 15, cy + 6,
+        cx - 7, cy - 2,
+        cx, cy + 4,
+        fill="#caa67b",
+        outline="",
+    )
+    canvas.create_polygon(
+        cx + 1, cy + 8,
+        cx + 10, cy - 4,
+        cx + 16, cy + 6,
+        fill="#b18d62",
+        outline="",
+    )
+
+
+def _draw_mountain_detail(canvas, cx: float, cy: float, terrain: str) -> None:
+    base_fill = "#726f74" if terrain == "mountains" else "#b27642"
+    shadow_fill = "#54535a" if terrain == "mountains" else "#8f582f"
+    snow_fill = "#eceef2" if terrain == "mountains" else "#f1c88f"
+    canvas.create_polygon(
+        cx - 20, cy + 12,
+        cx - 8, cy - 8,
+        cx + 3, cy + 12,
+        fill=base_fill,
+        outline="",
+    )
+    canvas.create_polygon(
+        cx - 4, cy + 13,
+        cx + 10, cy - 14,
+        cx + 22, cy + 13,
+        fill=shadow_fill,
+        outline="",
+    )
+    canvas.create_polygon(
+        cx - 10, cy - 4,
+        cx - 8, cy - 8,
+        cx - 4, cy - 1,
+        fill=snow_fill,
+        outline="",
+    )
+    canvas.create_polygon(
+        cx + 6, cy - 7,
+        cx + 10, cy - 14,
+        cx + 14, cy - 5,
+        fill=snow_fill,
+        outline="",
+    )
+
+
+def _draw_tile_detail(canvas, tile, cx: float, cy: float) -> None:
+    terrain = getattr(tile, "terrain", "plains")
+    if terrain in {"ocean", "coast", "lake", "reef"}:
+        _draw_water_detail(canvas, cx, cy, terrain)
+        return
+    if terrain == "hills":
+        _draw_hill_detail(canvas, cx, cy)
+        return
+    if terrain in {"mountains", "wonder"}:
+        _draw_mountain_detail(canvas, cx, cy, terrain)
+        return
+    _draw_plains_detail(canvas, cx, cy)
+
+
+def _point_in_polygon(x: float, y: float, points: Sequence[float]) -> bool:
+    inside = False
+    count = len(points) // 2
+    j = count - 1
+    for i in range(count):
+        xi, yi = points[2 * i], points[2 * i + 1]
+        xj, yj = points[2 * j], points[2 * j + 1]
+        intersects = ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi
+        )
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _coord_at_point(x: float, y: float, polygons: Dict[Coord, List[float]]) -> Optional[Coord]:
+    for coord in reversed(list(polygons.keys())):
+        if _point_in_polygon(x, y, polygons[coord]):
+            return coord
+    return None
+
+
+def _tile_lines(board, coord: Coord, render_cities: Sequence[RenderCity], river_tiles: Set[Coord]) -> List[str]:
+    tile = board.tiles[coord[1], coord[0]]
+    terrain = getattr(tile, "terrain", "unknown")
+    lines = [
+        f"Coord: {coord}",
+        f"Terrain: {terrain}",
+        f"River: {'yes' if coord in river_tiles else 'no'}",
+    ]
+
+    contains = getattr(tile, "contains", None)
+    district_kind = getattr(contains, "kind", None)
+    resource_name = getattr(contains, "name", None)
+    resource_tier = getattr(contains, "tier", None)
+    if district_kind is not None:
+        lines.append(f"Fixed district: {district_kind}")
+    if resource_name is not None and resource_tier is not None:
+        lines.append(f"Resource: {resource_name} ({resource_tier})")
+
+    city = _city_at(coord, render_cities)
+    if city is not None:
+        lines.append(f"City: {city.label}")
+    district = _district_at(coord, render_cities)
+    if district is not None:
+        lines.append(f"Placed: {district[0]}")
+    return lines
 
 
 def _summary_lines(board, solution: Solution, render_cities: Sequence[RenderCity], focus_radius: int) -> List[str]:
@@ -318,6 +600,7 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
 
     river_tiles = _river_tile_set(board)
     river_segments = _river_segments(board, visible)
+    tile_polygons: Dict[Coord, List[float]] = {}
 
     # Pass 1: tile polygons (with river-tinted fill / blue outline for river tiles).
     for coord in visible_coords:
@@ -325,6 +608,7 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         cx += x_offset
         cy += y_offset
         city = _city_at(coord, render_cities)
+        tile = board.tiles[coord[1], coord[0]]
         fill = _terrain_fill(board, coord, river_tiles)
         outline = "#7b6c57"
         width_px = 1
@@ -334,12 +618,27 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         if city is not None:
             outline = "#2e2d2d"
             width_px = 3
+        points = _hex_points(cx, cy)
+        tile_polygons[coord] = points
         canvas.create_polygon(
-            _hex_points(cx, cy),
+            points,
+            fill=_blend(fill, "#2a261f", 0.22),
+            outline="",
+        )
+        canvas.create_polygon(
+            _scaled_hex_points(cx, cy, 0.96),
             fill=fill,
             outline=outline,
             width=width_px,
         )
+        _draw_tile_detail(canvas, tile, cx, cy)
+        if coord in river_tiles:
+            canvas.create_polygon(
+                _scaled_hex_points(cx, cy, 0.84),
+                fill="",
+                outline=_blend(RIVER_EDGE_COLOR, "#ffffff", 0.45),
+                width=1,
+            )
 
     # Pass 2: rivers — drawn after polygons so the heavy blue line sits on top
     # of the tile borders. Each segment is a darker base line with a brighter
@@ -361,14 +660,41 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
             width=RIVER_EDGE_HIGHLIGHT_WIDTH,
             capstyle=tk.ROUND,
         )
+    node_counts: Dict[Tuple[int, int], int] = {}
+    for left, right in _river_edge_endpoint_pairs(board, visible, x_offset, y_offset):
+        for point in (left, right):
+            key = (round(point[0]), round(point[1]))
+            node_counts[key] = node_counts.get(key, 0) + 1
+    for (px, py), count in node_counts.items():
+        if count < 2:
+            continue
+        canvas.create_oval(
+            px - RIVER_NODE_RADIUS,
+            py - RIVER_NODE_RADIUS,
+            px + RIVER_NODE_RADIUS,
+            py + RIVER_NODE_RADIUS,
+            fill=RIVER_EDGE_COLOR,
+            outline="",
+        )
+        canvas.create_oval(
+            px - (RIVER_NODE_RADIUS - 2),
+            py - (RIVER_NODE_RADIUS - 2),
+            px + (RIVER_NODE_RADIUS - 2),
+            py + (RIVER_NODE_RADIUS - 2),
+            fill=RIVER_EDGE_HIGHLIGHT,
+            outline="",
+        )
 
-    # Pass 3: per-tile overlays — district markers, city labels, coords.
+    # Pass 3: per-tile overlays — resources, district markers, city labels.
     for coord in visible_coords:
         cx, cy = _coord_to_pixel(coord)
         cx += x_offset
         cy += y_offset
         city = _city_at(coord, render_cities)
         district = _district_at(coord, render_cities)
+        tile = board.tiles[coord[1], coord[0]]
+
+        _draw_resource_marker(canvas, cx, cy + 14, tile)
 
         if district is not None:
             label, color = district
@@ -395,14 +721,6 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
                 font=("Helvetica", 9, "bold"),
             )
 
-        canvas.create_text(
-            cx,
-            cy - HEX_SIZE - 7,
-            text=f"{coord[0]},{coord[1]}",
-            fill="#6b6358",
-            font=("Helvetica", 7),
-        )
-
     sidebar_x = width - SIDEBAR_WIDTH + 18
     canvas.create_rectangle(
         width - SIDEBAR_WIDTH,
@@ -420,16 +738,73 @@ def show_solution(board, solution: Solution, focus_radius: int = 2) -> bool:
         fill="#2d2a26",
         font=("Helvetica", 16, "bold"),
     )
+    summary_lines = _summary_lines(board, solution, render_cities, focus_radius)
     canvas.create_text(
         sidebar_x,
         56,
         anchor="nw",
-        text="\n".join(_summary_lines(board, solution, render_cities, focus_radius)),
+        text="\n".join(summary_lines),
         fill="#37332d",
         font=("Courier", 10),
     )
 
-    legend_y = height - 170
+    hover_panel_y = 78 + (len(summary_lines) * 18)
+    canvas.create_rectangle(
+        sidebar_x - 6,
+        hover_panel_y,
+        width - 18,
+        hover_panel_y + 150,
+        fill=HOVER_PANEL_FILL,
+        outline=HOVER_PANEL_BORDER,
+        width=1,
+    )
+    canvas.create_text(
+        sidebar_x,
+        hover_panel_y + 12,
+        anchor="nw",
+        text="Tile",
+        fill="#2d2a26",
+        font=("Helvetica", 14, "bold"),
+    )
+    hover_text_id = canvas.create_text(
+        sidebar_x,
+        hover_panel_y + 40,
+        anchor="nw",
+        text="",
+        fill="#37332d",
+        font=("Courier", 10),
+    )
+    hover_outline_id = canvas.create_polygon(
+        0, 0, 0, 0, 0, 0,
+        fill="",
+        outline=HOVER_OUTLINE,
+        width=4,
+        state="hidden",
+    )
+
+    def _set_hover(coord: Optional[Coord]) -> None:
+        if coord is None:
+            canvas.itemconfigure(hover_text_id, text="Move over a tile")
+            canvas.itemconfigure(hover_outline_id, state="hidden")
+            return
+        canvas.itemconfigure(
+            hover_text_id,
+            text="\n".join(_tile_lines(board, coord, render_cities, river_tiles)),
+        )
+        canvas.coords(hover_outline_id, *tile_polygons[coord])
+        canvas.itemconfigure(hover_outline_id, state="normal")
+
+    def _on_motion(event) -> None:
+        if event.x >= width - SIDEBAR_WIDTH:
+            _set_hover(None)
+            return
+        _set_hover(_coord_at_point(event.x, event.y, tile_polygons))
+
+    canvas.bind("<Motion>", _on_motion)
+    canvas.bind("<Leave>", lambda _event: _set_hover(None))
+    _set_hover(None)
+
+    legend_y = max(height - 170, hover_panel_y + 170)
     canvas.create_text(
         sidebar_x,
         legend_y,
