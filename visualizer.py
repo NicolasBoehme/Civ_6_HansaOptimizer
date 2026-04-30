@@ -256,12 +256,13 @@ def _river_edge_pixels(left: Coord, right: Coord) -> Tuple[float, float, float, 
     if length == 0:
         return mid_x, mid_y, mid_x, mid_y
 
-    # Shared hex edge is perpendicular to the line between the two centers,
-    # scaled to the actual edge length (HEX_SIZE / sqrt(3)) so the river line
-    # neatly tracks the hex border without bleeding into adjacent tiles.
+    # Shared hex edge is perpendicular to the line between the two centers.
+    # For a regular pointy-top hex with circumradius HEX_SIZE, the edge length
+    # equals HEX_SIZE, so half_edge = HEX_SIZE / 2 makes the drawn river segment
+    # span vertex-to-vertex along the actual hex border.
     perp_x = -dy / length
     perp_y = dx / length
-    half_edge = (HEX_SIZE / math.sqrt(3))
+    half_edge = HEX_SIZE / 2
     return (
         mid_x - perp_x * half_edge,
         mid_y - perp_y * half_edge,
