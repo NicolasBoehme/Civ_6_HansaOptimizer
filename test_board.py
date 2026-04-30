@@ -222,36 +222,45 @@ def build_civ_like_test_board(
 
     rivers: List[River] = []
     seen_segments: set[frozenset[Coord]] = set()
+    # Civ-6-style rivers flow along hex edges, so every consecutive triple of
+    # tiles in a path must form a mutually-adjacent triangle. That guarantees
+    # the two shared edges meet at a vertex and the rendered river is a
+    # continuous polyline along hex borders rather than a stair-step crossing
+    # through tile interiors.
     main_river = [
-        (start[0] - 5, start[1] - 5),
-        (start[0] - 4, start[1] - 4),
-        (start[0] - 3, start[1] - 3),
-        (start[0] - 2, start[1] - 2),
-        (start[0] - 1, start[1] - 1),
         start,
-        (start[0] + 1, start[1] + 1),
-        (start[0] + 2, start[1] + 2),
-        (start[0] + 3, start[1] + 3),
-        (start[0] + 5, start[1] + 3),
-        (start[0] + 7, start[1] + 3),
-        (start[0] + 8, start[1] + 2),
-        (start[0] + 9, start[1] + 1),
-        (start[0] + 10, start[1] + 2),
+        (start[0] + 1, start[1] - 1),
+        (start[0] + 2, start[1]),
+        (start[0] + 3, start[1] - 1),
+        (start[0] + 4, start[1]),
+        (start[0] + 5, start[1] - 1),
+        (start[0] + 6, start[1]),
+        (start[0] + 7, start[1] - 1),
+        (start[0] + 8, start[1]),
+        (start[0] + 9, start[1] - 1),
+        (start[0] + 10, start[1]),
     ]
     north_tributary = [
-        (start[0] + 7, start[1] - 3),
-        (start[0] + 5, start[1] - 3),
-        (start[0] + 3, start[1] - 3),
-        (start[0] + 2, start[1] - 2),
+        (start[0] - 3, start[1] - 5),
+        (start[0] - 4, start[1] - 4),
+        (start[0] - 2, start[1] - 4),
+        (start[0] - 3, start[1] - 3),
+        (start[0] - 1, start[1] - 3),
+        (start[0] - 2, start[1] - 2),
+        (start[0], start[1] - 2),
+        (start[0] - 1, start[1] - 1),
         (start[0] + 1, start[1] - 1),
-        start,
     ]
     southwest_tributary = [
-        (start[0] - 7, start[1] + 1),
-        (start[0] - 5, start[1] + 1),
-        (start[0] - 4, start[1]),
-        (start[0] - 2, start[1]),
+        (start[0] - 2, start[1] + 4),
+        (start[0] - 3, start[1] + 3),
+        (start[0] - 1, start[1] + 3),
+        (start[0] - 2, start[1] + 2),
+        (start[0], start[1] + 2),
+        (start[0] - 1, start[1] + 1),
+        (start[0] + 1, start[1] + 1),
         start,
+        (start[0] + 2, start[1]),
     ]
     river_paths = [main_river, north_tributary, southwest_tributary]
     for path in river_paths:

@@ -239,6 +239,16 @@ DOUBLE_2 = Template(
 )
 
 
+COMPOSITE_2_PLUS_2 = CompositeTemplate(
+    name="double_2+double_2",
+    n_cities=4,
+    slots=(),
+    expected_score=DOUBLE_2_TARGET * 2,
+    notes="Two independent doubles for N=3 (start hosted by one double, the other placed freely).",
+    parts=(DOUBLE_2, DOUBLE_2),
+)
+
+
 COMPOSITE_3_PLUS_2 = CompositeTemplate(
     name="triangle_3+double_2",
     n_cities=5,
@@ -249,5 +259,23 @@ COMPOSITE_3_PLUS_2 = CompositeTemplate(
 )
 
 
+COMPOSITE_3_PLUS_3 = CompositeTemplate(
+    name="triangle_3+triangle_3",
+    n_cities=6,
+    slots=(),
+    expected_score=TRIANGLE_3_TARGET * 2,
+    notes="Two independent triangles for N=5 (start hosted by one triangle, the other placed freely).",
+    parts=(TRIANGLE_3, TRIANGLE_3),
+)
+
+
 def load_default_library() -> TemplateLibrary:
-    return TemplateLibrary((TRIANGLE_3, DOUBLE_2, COMPOSITE_3_PLUS_2))
+    return TemplateLibrary(
+        (
+            TRIANGLE_3,
+            DOUBLE_2,
+            COMPOSITE_2_PLUS_2,
+            COMPOSITE_3_PLUS_2,
+            COMPOSITE_3_PLUS_3,
+        )
+    )

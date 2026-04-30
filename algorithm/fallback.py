@@ -188,10 +188,10 @@ def find_district_triangle(board, center, taken) -> Optional[Tuple[Coord, Coord,
     return None if best is None else best[1]
 
 
-def fallback_solve(board, starting_city, n) -> Placement:
+def fallback_solve(board, starting_city, n, *, prefilled: Optional[List[CityPlacement]] = None) -> Placement:
     sc = StartingCity.from_dict(starting_city, board)
     influence = compute_influence_field(board, sc)
-    placed: List[CityPlacement] = []
+    placed: List[CityPlacement] = list(prefilled) if prefilled else []
 
     for _index in range(n):
         best_candidate: Optional[Tuple[int, CityPlacement]] = None
