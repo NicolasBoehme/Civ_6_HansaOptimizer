@@ -188,14 +188,71 @@ def find_district_triangle(board, center, taken) -> Optional[Tuple[Coord, Coord,
     return None if best is None else best[1]
 
 
+def find_best_triangle_with_context(
+    board,
+    center: Coord,
+    sc: StartingCity,
+    placed: List[CityPlacement],
+    taken: Set[Coord],
+) -> Optional[Tuple[Tuple[Coord, Coord, Coord], int]]:
+    """Enumerate every valid (hansa, CH, AQ) configuration for ``center`` and
+    pick the one whose full-placement ``score_total`` is highest.
+
+    Unlike ``find_district_triangle``, this scores each candidate against the
+    starting city *and* every prefilled cluster city, so the new city's hansa
+    is positioned to maximise cross-adjacency with neighbouring AQs/CHs/hansas
+    in the existing triangle/double cluster instead of just the locally-best
+    isolated arrangement.
+    """
+    candidates = [
+        coord
+        for coord in tiles_within_radius(center, 3)
+        if coord not in taken and coord != center and _is_open_tile(board, coord)
+    ]
+
+    best: Optional[Tuple[Tuple[Coord, Coord, Coord], int]] = None
+    for aq in enumerate_aqueduct_tiles(board, center):
+        if aq in taken:
+            continue
+        for hansa in candidates:
+            if hansa == aq or distance(hansa, aq) != 1:
+                continue
+            for commhub in candidates:
+                if commhub in {aq, hansa}:
+                    continue
+                if distance(commhub, hansa) != 1:
+                    continue
+                trial_city = CityPlacement(
+                    center=center,
+                    hansa=hansa,
+                    commhub=commhub,
+                    harbor=None,
+                    aqueduct=aq,
+                )
+                trial = Placement(
+                    cities=tuple(list(placed) + [trial_city]),
+                    score=0,
+                    template_name=None,
+                    anchor=None,
+                    rotation=None,
+                    mirror=None,
+                    instance=None,
+                )
+                score = score_total(board, trial, starting_city=sc)
+                if best is None or score > best[1]:
+                    best = ((hansa, commhub, aq), score)
+    return best
+
+
 def fallback_solve(board, starting_city, n, *, prefilled: Optional[List[CityPlacement]] = None) -> Placement:
     sc = StartingCity.from_dict(starting_city, board)
     influence = compute_influence_field(board, sc)
     placed: List[CityPlacement] = list(prefilled) if prefilled else []
 
     for _index in range(n):
-        best_candidate: Optional[Tuple[int, CityPlacement]] = None
+        best_candidate: Optional[Tuple[Tuple[int, int], CityPlacement]] = None
         occupied = _occupied_tiles(sc, placed)
+        cluster_centers = [sc.center] + [c.center for c in placed]
         centers = sorted(
             enumerate_valid_centers(board, sc, placed),
             key=lambda coord: influence.get(coord, 0),
@@ -205,10 +262,12 @@ def fallback_solve(board, starting_city, n, *, prefilled: Optional[List[CityPlac
         for center in centers:
             if center in occupied:
                 continue
-            triangle = find_district_triangle(board, center, occupied | {center})
-            if triangle is None:
+            best_for_center = find_best_triangle_with_context(
+                board, center, sc, placed, occupied | {center}
+            )
+            if best_for_center is None:
                 continue
-            hansa, commhub, aqueduct = triangle
+            (hansa, commhub, aqueduct), score = best_for_center
             city = CityPlacement(
                 center=center,
                 hansa=hansa,
@@ -216,18 +275,10 @@ def fallback_solve(board, starting_city, n, *, prefilled: Optional[List[CityPlac
                 harbor=None,
                 aqueduct=aqueduct,
             )
-            placement = Placement(
-                cities=tuple(placed + [city]),
-                score=0,
-                template_name=None,
-                anchor=None,
-                rotation=None,
-                mirror=None,
-                instance=None,
-            )
-            score = score_total(board, placement, starting_city=sc)
-            if best_candidate is None or score > best_candidate[0]:
-                best_candidate = (score, city)
+            cohesion = -sum(distance(center, other) for other in cluster_centers)
+            key = (score, cohesion)
+            if best_candidate is None or key > best_candidate[0]:
+                best_candidate = (key, city)
 
         if best_candidate is None:
             raise FallbackInfeasible("fallback could not place another city")
